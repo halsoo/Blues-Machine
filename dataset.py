@@ -16,7 +16,7 @@ class BluesPairSet:
         self.data_list = [self._get_short_pitch_list(midi_path) for midi_path in tqdm(midi_path_list)]
         self.pair_list = self._get_pair_list(self.data_list)
         
-        self.max_data_len = self._get_max_data_len(self.data_list)
+        self.max_part_len_list = self._get_max_part_len(self.pair_list)
         
         self.idx2token, self.token2idx = self._get_vocab()
         self.vocab_size = len(self.idx2token)
@@ -46,11 +46,16 @@ class BluesPairSet:
             
         return pair_list
     
-    def _get_max_data_len(self, data_list):
-        data_len_list = [len(data) for data in data_list]
-        max_data_len = max(data_len_list)
+    def _get_max_part_len(self, pair_list):
+        # 0: list of calls, 1: list of reses
+        pair_part_list = [[pair[0] for pair in pair_list], [pair[1] for pair in pair_list]] 
         
-        return max_data_len
+        pair_part_len_list = [[len(part) for part in part_list] for part_list in pair_part_list]
+        
+        # 0: call max len, 1: res max len
+        max_len_list = [max(part_len_list) for part_len_list in pair_part_len_list]
+        
+        return max_len_list
     
     def _get_vocab(self):
         vocab = [i for i in range(21, 109)]
@@ -59,41 +64,26 @@ class BluesPairSet:
         token2idx = {tok: idx for idx, tok in enumerate(vocab)}
         return vocab, token2idx
     
-    def _add_pad_short_part_of_pair(self, pair):
-        [call, res] = pair
+    def _add_pad(self, idx, part):
+        part_max_len = self.max_part_len_list[idx]
+        part_len = len(part)
+        num_pad_to_add = part_max_len - part_len
         
-        len_diff = len(call) - len(res)
-        num_pad_to_add = abs(len_diff)
+        if idx == 1:
+            num_pad_to_add += 2
         
-        if len_diff == 0:
-            return pair
-        
-        if len_diff < 0:
-            call += ['<pad>'] * num_pad_to_add
-        else:
-            res += ['<pad>'] * num_pad_to_add
-            
-        return [call, res]
-    
-    def _add_pad_accord_max_data_len(self, pair):
-        assert len(pair[0]) == len(pair[1]), 'pair len not matched'
-        
-        pair_len = len(pair[0])
-        num_pad_to_add = (self.max_data_len + 2) - pair_len # 2 is num of special tokens(start, end)
-        
-        return [part + (['<pad>'] * num_pad_to_add) for part in pair ]
+        return part + (['<pad>'] * num_pad_to_add)
      
     def __len__(self):
         return len(self.pair_list)
     
     def __getitem__(self, idx):
-        pair = self.pair_list[idx]
-        pair_token_attached = [['<start>'] + pitch_list + ['<end>'] for pitch_list in pair]
-        pair_token_padded = self._add_pad_short_part_of_pair(pair_token_attached)
-        pair_token_padded = self._add_pad_accord_max_data_len(pair_token_padded)
-        
-        pair_in_idx = [ [self.token2idx[token] for token in token_list] for token_list in pair_token_padded ]
-        
-        pair_in_idx_tensor = torch.tensor(pair_in_idx)
-        
-        return pair_in_idx_tensor[0, :], pair_in_idx_tensor[1, :]
+        [call, res] = self.pair_list[idx]
+            
+        res_token_attached = ['<start>'] + res + ['<end>']
+
+        pair_padded = [self._add_pad(idx, part) for idx, part in enumerate([call, res_token_attached])]
+
+        pair_in_idx = [ [self.token2idx[token] for token in token_list] for token_list in pair_padded ]
+
+        return torch.tensor(pair_in_idx[0]), torch.tensor(pair_in_idx[1])
