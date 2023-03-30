@@ -5,66 +5,61 @@ import torch.nn as nn
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_size, embedding_size, hidden_size, num_layers=1, dropout_p=0.5):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers=1, dropout_p=0.5, device='cpu'):
         super().__init__()
         
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        # self.dropout = nn.Dropout(dropout_p)
         
-        self.embedding = nn.Embedding(input_size, embedding_size)
-        self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout = dropout_p, batch_first=True)
+        self.device = device
+        
+        self.embedding = nn.Embedding(input_size, embedding_size).to(self.device)
+        self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout = dropout_p, batch_first=True).to(self.device)
         
         
-    def forward(self, x): # x.shape = [batch size, input len]
+    def forward(self, x): 
+        # x: (batch size, input len)
+        embedded = self.embedding(x) # (batch size, input len, emb dim)
         
-        # embedded = self.dropout(self.embedding(x))
-        embedded = self.embedding(x) # [batch size, input len, emb dim]
+        _, hidden = self.rnn(embedded)
         
-        outputs, hidden = self.rnn(embedded)
-        
-        # outputs = [batch size, x len, hidden size * num direction] / num direction = 1
-        # hidden = [n layers * num direction, batch size, hidden size] / num direction = 1
+        # outputs: (batch size, input len, hidden size * num dir)
+        # hidden: (n layers, batch size, hidden size)
         
         return hidden
 
 
 class Decoder(nn.Module):
-    def __init__(self, output_size, embedding_size, hidden_size, num_layers=1, dropout_p=0.5):
+    def __init__(self, output_size, embedding_size, hidden_size, num_layers=1, dropout_p=0.5, device='cpu'):
         super().__init__()
         
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         
-        self.embedding = nn.Embedding(output_size, embedding_size)
-        # self.dropout = nn.Dropout(dropout_p)
+        self.device = device
         
-        self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout = dropout_p, batch_first=True)
+        self.embedding = nn.Embedding(output_size, embedding_size).to(self.device)
         
-        self.fc_out = nn.Linear(hidden_size, output_size)
+        self.rnn = nn.GRU(embedding_size, hidden_size, num_layers, dropout = dropout_p, batch_first=True).to(self.device)
+        
+        self.fc_out = nn.Linear(hidden_size, output_size).to(self.device)
         
         
     def forward(self, input, hidden):
-        # input.shape = [batch size] // list of tokens, len of batch size
-        # hidden = [n layers (* n directions), batch size, hidden size] / num direction = 1
-        
-        input = input.unsqueeze(1) # [batch size, 1]
-        
-        # embedded = self.dropout(self.embedding(input))
-        embedded = self.embedding(input)
-        
-        # embedded = [batch size, 1, emb size]
+        # input: (batch size, input len)
+        # hidden: (n layers, batch size, hidden size)
+
+        embedded = self.embedding(input) # (batch size, input len, emb size)
                 
         output, hidden = self.rnn(embedded, hidden)
         
-        # num direction always 1
-        # outputs = [batch size, 1, hidden size]
-        # hidden = [n layers, batch size, hidden size]
+        # output: (batch size, input len, hidden size)
+        # hidden: (n layers, batch size, hidden size)
         
-        prediction = self.fc_out(output.squeeze(1))
+        prediction = self.fc_out(output)
         
-        # prediction = [batch size, output size]
+        # prediction = (batch size, input len, output size)
         
         return prediction, hidden
     
@@ -72,44 +67,53 @@ class Decoder(nn.Module):
 class Seq2Seq(nn.Module):
     def __init__(self, encoder, decoder, device='cpu'):
         super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
         self.device = device
+
+        self.encoder = encoder.to(self.device)
+        self.decoder = decoder.to(self.device)
         
         assert encoder.hidden_size == decoder.hidden_size, "Hidden size not matched"
         assert encoder.num_layers == decoder.num_layers, "Number of layers not matched"
         
-    def forward(self, input, target, teacher_forcing_ratio = 0.5):
+    def forward(self, input, target, teacher_forcing_ratio = 0.5, parallel_calc = True):
         
-        # input = [batch size, src len]
-        # target = [batch size, target len]
-        # teacher_forcing_ratio is probability to use teacher forcing
-        target_len = target.shape[1]
+        # input: (batch size, src len)
+        # target: (batch size, target len)
+        # teacher_forcing_ratio: probability of teacher forcing
         
-        # tensor to store decoder outputs
-        outputs = [] # expected output shape: target_len, batch_size, target_vocab_size
+        # expected output shape: (target_len-1, batch_size, target_vocab_size)
+        # target_len - 1: except <sos>
         
-        # last hidden state of the encoder is used as the initial hidden state of the decoder
+        input.to(self.device)
+        target.to(self.device)
+        
         hidden = self.encoder(input)
         
-        #first input to the decoder is the <sos> tokens
-        decoder_input = target[:, 0]
+        if parallel_calc:
+            outputs, _ = self.decoder(target[:, :-1], hidden)
+            return outputs
+            
+        else:
+            outputs = []
+            target_len = target.shape[1]
         
-        for t in range(1, target_len):
-            #insert input token embedding, previous hidden and previous cell states
-            #receive output tensor (predictions) and new hidden and cell states
-            output, hidden= self.decoder(decoder_input, hidden)
+            #<sos> tokens
+            decoder_input = target[:, 0].unsqueeze(1).to(self.device) # (batch size) => (batch size, 1)
             
-            #place predictions in a tensor holding predictions for each token
-            outputs.append(output) # 0 ~ target_len - 2
+            for t in range(1, target_len): # after <sos>, before <eos>
+                preds, hidden= self.decoder(decoder_input, hidden)
+                
+                #place predictions in a tensor holding predictions for each token
+                outputs.append(preds)
+                
+                #get the highest predicted token from our predictions
+                top_pred = preds.softmax(2).argmax(2).to(self.device)
+                
+                teacher_force = random.random() < teacher_forcing_ratio
+                
+                decoder_input = target[:, t].unsqueeze(1).to(self.device) if teacher_force else top_pred
+                
+            outputs = torch.stack(outputs).squeeze(2).to(self.device)
+            outputs = outputs.permute(1, 0, 2).contiguous().to(self.device) # (batch size, target len - 1, target vocab size)
             
-            #get the highest predicted token from our predictions
-            top_pred = output.argmax(1)
-            
-            teacher_force = random.random() < teacher_forcing_ratio
-            
-            #if teacher forcing, use actual next token as next input
-            #if not, use predicted token
-            decoder_input = target[:, t] if teacher_force else top_pred
-        
-        return torch.stack(outputs) # [target len - 1, batch size, target vocab size]
+            return outputs
