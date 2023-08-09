@@ -1,5 +1,11 @@
 import subprocess
+from collections import Counter
+
+import torch
 import numpy as np
+
+import muspy
+import pypianoroll as pypi
 
 UNIT_AS_TICK = 120 # 16th note as tick
 BEAT_AS_TICK = 4 * UNIT_AS_TICK # 4th note as tick
@@ -134,5 +140,92 @@ def add_padding_bar(pitch_list):
     return pitch_list
 
 def midi2audio(midi_file, audio_file, sr=44100):
-    subprocess.call(['/opt/homebrew/bin/fluidsynth', midi_file, '-F', audio_file, '-r', str(sr)])
+    subprocess.call(['/usr/bin/fluidsynth', midi_file, '-F', audio_file, '-r', str(sr)])
     
+    
+def prepare_inference_res(token2idx):
+    start_only = ["<start>"]
+    start_only = [token2idx[tk] for tk in start_only]
+    return torch.tensor(start_only)
+    
+
+def prepare_inference_midi(midi_path, token2idx):
+    song = muspy.read(f'{midi_path}')
+
+    song_attrs = midi_path.name.split('.')[0].split('-')
+
+    # clean up bpm
+    bpm = float(song_attrs[3])
+    new_tempos = np.array([muspy.Tempo(0, bpm)])
+    
+    song.tempos = new_tempos
+
+    # transpose to C major / A minor 
+    key_and_mode = song_attrs[2]
+
+    semitone_dict = relative_semitones_minor if 'm' in key_and_mode else relative_semitones_major
+
+    orig_key = key_and_mode[:-1] if len(key_and_mode) > 1 else key_and_mode
+
+    song.transpose(-1 * semitone_dict[orig_key])
+    
+    # quantize process
+    pianoroll_obj = muspy.to_pypianoroll(song)
+
+    quantized_pianoroll_obj = pianoroll_obj.copy()
+    before_quantized_pianoroll = quantized_pianoroll_obj.tracks[0].pianoroll
+    before_quantized_pianoroll_binaryroll = pianoroll2binaryroll(before_quantized_pianoroll)
+    before_quantized_pianoroll_pitch_list = binaryroll2pitchlist(before_quantized_pianoroll_binaryroll)
+
+    len_pitch_list = len(before_quantized_pianoroll_pitch_list)
+
+    quantized_pianoroll_short_pitch_list = []
+
+    for i in range(0, len_pitch_list, UNIT_AS_TICK):
+        sliced = before_quantized_pianoroll_pitch_list[i : i + UNIT_AS_TICK]
+
+        pitch_cnt_dict = dict(Counter(sliced))
+        
+        max_pitch_cnt_value = max(pitch_cnt_dict.values())
+        max_pitch_cnt_pitch = [key for key, val in pitch_cnt_dict.items() if val == max_pitch_cnt_value][0]
+        
+        quantized_pianoroll_short_pitch_list.append(max_pitch_cnt_pitch)
+    
+    # attach token
+    call_token_attached = quantized_pianoroll_short_pitch_list
+    call_ready = [token2idx[token] for token in call_token_attached]
+    
+    quantized_pianoroll = pitchlist2pianoroll(shortpitchlist2pitchlist(quantized_pianoroll_short_pitch_list))
+    quantized_pianoroll_obj.tracks[0].pianoroll = quantized_pianoroll
+
+    return [pianoroll_obj, quantized_pianoroll_obj], torch.tensor(call_ready) # return original pianoroll also for convenience
+
+def model_output_to_pianoroll(output, idx2token, original_pianoroll_obj):
+    token_list = [idx2token[idx] for idx in output.tolist()]
+    short_pitch_list = [token for token in token_list if token != '<pad>' and token != '<start>' and token != '<end>']
+
+    pitch_list = shortpitchlist2pitchlist(short_pitch_list)
+    pianoroll = pitchlist2pianoroll(pitch_list)
+    
+    result_pianoroll_obj = make_empty_pianoroll(original_pianoroll_obj)
+    
+    result_pianoroll_obj.tracks[0].pianoroll = pianoroll
+    
+    return result_pianoroll_obj
+
+def pianoroll2muspy(pianoroll_obj):
+    song = muspy.from_pypianoroll(pianoroll_obj)
+    return song
+
+def prepare_compare_res(midi_path, token2idx, idx2token):
+    [original_pianoroll_obj, quantized_pianoroll_obj], res = prepare_inference_midi(midi_path, token2idx)
+    compare_res = model_output_to_pianoroll(res, idx2token, quantized_pianoroll_obj)
+    
+    return compare_res
+
+def make_empty_pianoroll(original_obj):
+    resolution = original_obj.resolution
+    tempo = original_obj.tempo
+    tracks = [pypi.Track()]
+    
+    return pypi.Multitrack(resolution=resolution, tempo=tempo, tracks=tracks)

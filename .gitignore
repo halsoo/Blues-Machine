@@ -1,5 +1,7 @@
 graphs/
 data_set/
+data_test/
+test_result/
 quantized/
 models/
 __pycache__/

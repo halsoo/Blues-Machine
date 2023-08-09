@@ -87,3 +87,21 @@ class BluesPairSet:
         pair_in_idx = [ [self.token2idx[token] for token in token_list] for token_list in pair_padded ]
 
         return torch.tensor(pair_in_idx[0]), torch.tensor(pair_in_idx[1])
+    
+
+def make_collate_fn(device):
+    
+    def collate_fn(raw_batch):
+        call_list = []
+        res_list = []
+        
+        for pair in raw_batch:
+            call_list.append(pair[0])
+            res_list.append(pair[1])
+            
+        call_list = [item.to(device) for item in call_list]
+        res_list = [item.to(device) for item in res_list]
+        
+        return torch.stack(call_list), torch.stack(res_list)
+    
+    return collate_fn
