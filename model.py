@@ -75,7 +75,7 @@ class Seq2Seq(nn.Module):
     assert encoder.hidden_size == decoder.hidden_size, "Hidden size not matched"
     assert encoder.num_layers == decoder.num_layers, "Number of layers not matched"
       
-  def forward(self, input, target, inference_mode=False, max_len = None): # teacher_forcing_ratio = 0.5, parallel_calc = True, 
+  def forward(self, input, target, inference_mode=False, max_len = None):
         
     # input: (batch size, src len)
     # target: (batch size, target len)

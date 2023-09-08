@@ -4,19 +4,19 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-muspy = "*"
-mido = "*"
-matplotlib = "*"
-numpy = "*"
-pypianoroll = "*"
-torch = "*"
-torchaudio = "*"
-pytorch-lightning = "*"
-wandb = "*"
-tqdm = "*"
+muspy = "0.5.0"
+mido = "1.3.0"
+matplotlib = "3.7.2"
+numpy = "1.25.2"
+pypianoroll = "1.0.4"
+torch = "2.0.1"
+torchaudio = "2.0.2"
+pytorch-lightning = "2.0.6"
+wandb = "0.15.8"
+tqdm = "4.26.2"
 
 [dev-packages]
-ipykernel = "*"
+ipykernel = "6.25.1"
 
 [requires]
 python_version = "3.9"

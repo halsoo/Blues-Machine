@@ -6,4 +6,6 @@ quantized/
 models/
 __pycache__/
 
+wandb/
+
 .DS_Store

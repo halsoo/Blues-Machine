@@ -1,0 +1,21 @@
+device: 'cuda'
+
+rnn: 
+  emb_dim: 64
+  hid_dim: 256
+  num_layer: 3
+
+data:
+  pad_token: '<pad>'
+  train:
+    split: 42
+    batch_size: 16
+  valid:
+    split: 10
+    batch_size: 10
+
+lr: 1e-3
+
+num_epoch: 1500
+project_name: '2303-blues_machine'
+run_name: 'random_split_001'
